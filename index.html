@@ -200,7 +200,6 @@ let color=perTool.pen.color,size=perTool.pen.size,alpha=1,cap='butt';
 let straightToggle=false,straightKey=false;
 let gridOn=false,gridStepMM=10,gridColor='#3a4f7a',gridFirst=false;
 let palmReject=true,pressureOn=true,tiltOn=true;
-const penRecent={active:false,ts:0};
 
 /* ==== tool/UI ==== */
 function saveToolState(k){const p=perTool[k]||(perTool[k]={});p.color=color;p.size=size;p.alpha=alpha;p.cap=cap;p.straight=!!straightToggle;}
@@ -265,11 +264,12 @@ $('#btnZoomReset').addEventListener('click',()=>setZoom(1));
 /* ==== grid ==== */
 function clear(c){c.getContext('2d').clearRect(0,0,c.width,c.height)}
 function mmToPx(mm){return mm*96/25.4*DPR}
+let gridStepMM=10,gridColor='#3a4f7a',gridOn=false,gridFirst=false;
 function drawGrid(){ clear(cvGrid); if(!gridOn) return;
   const step=mmToPx(gridStepMM), s=ctxGrid, ox=0.5*DPR, oy=0.5*DPR;
   s.save(); s.lineWidth=1; s.strokeStyle=gridColor+'CC'; s.beginPath();
   for(let x=ox;x<=cvGrid.width;x+=step){ s.moveTo(x,0); s.lineTo(x,cvGrid.height); }
-  for(let y=oy;y<=cvGrid.height;y+=step){ s.moveTo(0,y); s.lineTo(cvGrid.width,y); }  /* ← 横線バグ修正 */
+  for(let y=oy;y<=cvGrid.height;y+=step){ s.moveTo(0,y); s.lineTo(cvGrid.width,y); } /* 横線修正 */
   s.stroke(); s.restore(); }
 
 /* ==== history (Undo/Redo) ==== */
@@ -299,7 +299,7 @@ function setCtx(){
 }
 function hexA(hex,a){const m=/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)||['','00','00','00'];const r=parseInt(m[1],16),g=parseInt(m[2],16),b=parseInt(m[3],16);return `rgba(${r},${g},${b},${a??1})`;}
 
-/* 実寸座標（ズレ防止） */
+/* 実寸座標 */
 function pt(e){ const r=cv.getBoundingClientRect();
   const x=(e.clientX - r.left) * (cv.width  / r.width);
   const y=(e.clientY - r.top ) * (cv.height / r.height);
@@ -307,7 +307,7 @@ function pt(e){ const r=cv.getBoundingClientRect();
 function snapToGrid(p){if(!gridOn)return p;const g=mmToPx(gridStepMM);return {x:Math.round(p.x/g)*g,y:Math.round(p.y/g)*g}}
 function snapLine(p0,p1){if(gridFirst){const a0=snapToGrid(p0),a1=snapToGrid(p1);return {x:a1.x,y:a1.y,ang:Math.atan2(a1.y-a0.y,a1.x-a0.x)}} const dx=p1.x-p0.x,dy=p1.y-p0.y,step=Math.PI/12;let ang=Math.round(Math.atan2(dy,dx)/step)*step;let len=Math.hypot(dx,dy),x=p0.x+Math.cos(ang)*len,y=p0.y+Math.sin(ang)*len;if(gridOn){({x,y}=snapToGrid({x,y}))}return {x,y,ang}}
 
-/* === palm reject === */
+/* palm reject */
 let activeTouches=0;
 function shouldReject(e){
   if(!palmReject) return false;
@@ -315,9 +315,9 @@ function shouldReject(e){
   return false;
 }
 
-/* === drawing handlers === */
+/* drawing handlers */
 let drawing=false, startPt=null, panning=false;
-/* 追加：曲線の重ね塗り防止用の前回点 */
+/* 曲線の重ね濃さ/スパイク防止用 */
 let lastPt=null;
 
 function onDown(e){
@@ -344,7 +344,7 @@ function onDown(e){
   drawing=true;
 
   if(!straight){
-    /* ★ セグメント描画に切替（同一路線の再ストローク禁止） */
+    /* 曲線は“区間ごと1回塗り” */
     lastPt = startPt;
   }
 
@@ -360,8 +360,9 @@ function onMove(e){
 
   const straight=(straightKey || $('#uiStraight').checked);
   if(!straight){
-    /* ★ 区間ごと1回だけ stroke（濃さが積み上がらない） */
+    /* 曲線：トゲ防止のため一時的に丸キャップで区間描画 */
     const list=(e.getCoalescedEvents && e.getCoalescedEvents()) || [e];
+    const prevCap = ctx.lineCap; ctx.lineCap='round';
     for(const ev of list){
       const p=pt(ev);
       ctx.beginPath();
@@ -370,6 +371,7 @@ function onMove(e){
       ctx.stroke();
       lastPt = p;
     }
+    ctx.lineCap = prevCap;
     return;
   }
   const p=pt(e), sp=snapLine(startPt,p);
@@ -394,6 +396,7 @@ cv.addEventListener('pointermove',onMove,{passive:false});
 cv.addEventListener('pointerrawupdate',onMove,{passive:false});
 cv.addEventListener('pointerup',onUp,{passive:false});
 cv.addEventListener('pointercancel',onUp,{passive:false});
+let straightKey=false;
 addEventListener('keydown',e=>{ if(e.key==='Shift') straightKey=true; });
 addEventListener('keyup',e=>{ if(e.key==='Shift') straightKey=false; });
 
