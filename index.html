@@ -105,9 +105,10 @@ header.topbar{position:fixed;top:0;left:0;right:0;z-index:2000;height:var(--topb
     <div id="panelTool">-</div>
     <button class="close" id="panelClose" title="閉じる">☒</button>
   </div>
-  <div class="row"><label>色</label><input type="color" id="uiColor" value="#cbe58a"></div>
+  <!-- ★ 初期値を黒に -->
+  <div class="row"><label>色</label><input type="color" id="uiColor" value="#000000"></div>
   <div class="row" id="rowSize"><label>太さ</label><input type="range" min="1" max="60" value="4" id="uiSize"><span id="uiSizeVal">4px (1.06 mm)</span></div>
-  <div class="row" id="rowAlpha"><label>不透明度</label><input type="range" min="10" max="100" value="100" id="uiAlpha"><span id="uiAlphaVal">100%</span></div>
+  <div class="row" id="rowAlpha"><label>不透明度</label><input type="range" min="10" max="100" value="50" id="uiAlpha"><span id="uiAlphaVal">50%</span></div>
   <div class="row" id="rowLineCap"><label>端の形</label>
     <select id="uiCap"><option value="butt">□ 角</option><option value="round">● 丸</option></select>
   </div>
@@ -188,7 +189,13 @@ document.addEventListener('visibilitychange',()=>{ if(!document.hidden) setTimeo
 
 /* ==== state ==== */
 let tool='pen';
-const perTool={pen:{color:'#cbe58a',size:4,alpha:1,cap:'butt',straight:false},marker:{color:'#cbe58a',size:16,alpha:.4,cap:'butt',straight:false},eraser:{size:24},hand:{},keyboard:{}};
+/* ★ 既定値を修正：pen=黒 / marker=黄 / alpha=0.5 */
+const perTool={
+  pen:{   color:'#000000', size:4,  alpha:1,   cap:'butt', straight:false},
+  marker:{color:'#FFFF00', size:16, alpha:.5,  cap:'butt', straight:false},
+  eraser:{size:24},
+  hand:{}, keyboard:{}
+};
 let color=perTool.pen.color,size=perTool.pen.size,alpha=1,cap='butt';
 let straightToggle=false,straightKey=false;
 let gridOn=false,gridStepMM=10,gridColor='#3a4f7a',gridFirst=false;
@@ -262,7 +269,7 @@ function drawGrid(){ clear(cvGrid); if(!gridOn) return;
   const step=mmToPx(gridStepMM), s=ctxGrid, ox=0.5*DPR, oy=0.5*DPR;
   s.save(); s.lineWidth=1; s.strokeStyle=gridColor+'CC'; s.beginPath();
   for(let x=ox;x<=cvGrid.width;x+=step){ s.moveTo(x,0); s.lineTo(x,cvGrid.height); }
-  for(let y=oy;y<=cvGrid.height;y+=step){ s.moveTo(0,y); s.lineTo(cvGrid.width,y); }
+  for(let y=oy;y<=cvGrid.height;y+=step){ s.moveTo(0,y); s.lineTo(y,cvGrid.height); }
   s.stroke(); s.restore(); }
 
 /* ==== history (Undo/Redo) ==== */
@@ -290,7 +297,7 @@ function setCtx(){
   else if(tool==='eraser'){ ctx.globalCompositeOperation='destination-out'; ctx.strokeStyle='#000'; }
   ctx.lineWidth=(size||4)*DPR;
 }
-function hexA(hex,a){const m=/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)||['','cc','e5','8a'];const r=parseInt(m[1],16),g=parseInt(m[2],16),b=parseInt(m[3],16);return `rgba(${r},${g},${b},${a??1})`;}
+function hexA(hex,a){const m=/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)||['','00','00','00'];const r=parseInt(m[1],16),g=parseInt(m[2],16),b=parseInt(m[3],16);return `rgba(${r},${g},${b},${a??1})`;}
 
 /* 実寸座標（ズレ防止） */
 function pt(e){ const r=cv.getBoundingClientRect();
@@ -300,15 +307,11 @@ function pt(e){ const r=cv.getBoundingClientRect();
 function snapToGrid(p){if(!gridOn)return p;const g=mmToPx(gridStepMM);return {x:Math.round(p.x/g)*g,y:Math.round(p.y/g)*g}}
 function snapLine(p0,p1){if(gridFirst){const a0=snapToGrid(p0),a1=snapToGrid(p1);return {x:a1.x,y:a1.y,ang:Math.atan2(a1.y-a0.y,a1.x-a0.x)}} const dx=p1.x-p0.x,dy=p1.y-p0.y,step=Math.PI/12;let ang=Math.round(Math.atan2(dy,dx)/step)*step;let len=Math.hypot(dx,dy),x=p0.x+Math.cos(ang)*len,y=p0.y+Math.sin(ang)*len;if(gridOn){({x,y}=snapToGrid({x,y}))}return {x,y,ang}}
 
-/* === palm reject 改修 ===
-   ・基本：二本目以降のタッチを拒否
-   ・面積では弾かない（誤判定回避）
-   ・UIの「パーム除外」をOFFにすると多指も許可
-*/
+/* === palm reject === */
 let activeTouches=0;
 function shouldReject(e){
   if(!palmReject) return false;
-  if(e.pointerType==='touch' && activeTouches>=1) return true; // 2本目以降のみ拒否
+  if(e.pointerType==='touch' && activeTouches>=1) return true;
   return false;
 }
 
@@ -325,7 +328,6 @@ function onDown(e){
   }
   e.preventDefault(); try{cv.setPointerCapture(e.pointerId)}catch{};
   setCtx();
-  // 可変太さ（圧力ON時のみ）
   const base=size*DPR;
   if((tool==='pen'||tool==='marker') && pressureOn && typeof e.pressure==='number'){
     const p = Math.max(0.05, Math.min(1, e.pressure||0.5));
@@ -341,7 +343,6 @@ function onDown(e){
 
   if(!straight){ ctx.beginPath(); ctx.moveTo(startPt.x,startPt.y); }
 
-  // ここで履歴を積む（Undo）
   pushHistory();
 }
 function onMove(e){
@@ -359,7 +360,6 @@ function onMove(e){
     ctx.stroke();
     return;
   }
-  // 直線プレビュー
   const p=pt(e), sp=snapLine(startPt,p);
   clear(cvGuide); const g=ctxGuide, d=DPR;
   g.save(); g.lineCap=ctx.lineCap; g.lineWidth=ctx.lineWidth; g.strokeStyle='#7ec8ff';
@@ -407,621 +407,5 @@ function boot(){
   cv.style.touchAction='none';
 }
 boot();
-</script>
-  <script>
-// ===== B-REL6 Hotfix: straight-line preview + marker alpha unify =====
-(function(){
-  // 既存のキャンバスを取得（B-REL6のID/クラスに合わせて調整）:
-  const stage = document.getElementById('stage') || document.querySelector('.a4-stage') || document.body;
-  const main  = document.getElementById('note')  || document.querySelector('canvas#note') || document.querySelector('canvas');
-  // 既に存在すれば再利用、無ければ重ねる overlay
-  let ov = document.getElementById('overlay');
-  if(!ov){
-    ov = document.createElement('canvas');
-    ov.id = 'overlay';
-    ov.style.cssText = 'position:absolute;inset:0;pointer-events:none;width:100%;height:100%';
-    main.parentNode.appendChild(ov);
-  }
-  const mtx  = main.getContext('2d');
-  const octx = ov.getContext('2d');
-  const dpr  = Math.max(1, window.devicePixelRatio || 1);
-
-  // A4枠に追随（B-REL6側がresizeしているなら同じタイミングで同期されます）
-  function sync(){
-    const r = main.getBoundingClientRect();
-    const w = Math.max(2, Math.floor(r.width  * dpr));
-    const h = Math.max(2, Math.floor(r.height * dpr));
-    if (ov.width!==w)  ov.width  = w;
-    if (ov.height!==h) ov.height = h;
-    ov.style.width  = r.width+'px';
-    ov.style.height = r.height+'px';
-    octx.lineCap = octx.lineJoin = 'round';
-  }
-  new ResizeObserver(sync).observe(main);
-  sync();
-
-  // ---- 既定（B-REL6 と同じ変数があればそちらを優先） ----
-  let tool         = window.currentTool || 'pen';      // 'pen'|'marker'|'eraser'|'line' など
-  let penColor     = window.penColor    || '#000000';
-  let markerColor  = window.markerColor || '#FFFF00';
-  let markerAlpha  = (typeof window.markerAlpha==='number') ? window.markerAlpha : 0.5;
-  let penWidth     = window.penWidth    || 2;
-  let markerWidth  = window.markerWidth || 18;
-
-  // 既存のツール変更APIがあればフック（任意）
-  if (window.NoteLink && typeof window.NoteLink.onToolChange === 'function') {
-    const orig = window.NoteLink.onToolChange;
-    window.NoteLink.onToolChange = (t)=>{ tool=t; return orig(t); };
-  } else {
-    // 簡易ホットキー（B-REL6の既存挙動は変えない）
-    addEventListener('keydown', e=>{
-      if(e.key==='1') tool='pen';
-      if(e.key==='2') tool='marker';
-      if(e.key==='3') tool='eraser';
-    });
-  }
-
-  // ---- 直線はプレビューだけに描く（本描画はmouseupで1回） ----
-  let drawing=false, sx=0, sy=0, lx=0, ly=0;
-
-  function style(ctx, which){
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.lineCap = ctx.lineJoin = 'round';
-    if (which==='pen'){
-      ctx.globalAlpha = 1.0; ctx.strokeStyle = penColor;    ctx.lineWidth = penWidth   * dpr;
-    } else if (which==='marker'){
-      ctx.globalAlpha = markerAlpha; // ★ 直線/曲線どちらも統一
-      ctx.strokeStyle = markerColor; ctx.lineWidth = markerWidth * dpr;
-    }
-  }
-  function styleErase(ctx){
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.globalAlpha = 1.0;
-  }
-  function pos(e){
-    const r = main.getBoundingClientRect();
-    return { x:(e.clientX - r.left)*dpr, y:(e.clientY - r.top)*dpr };
-  }
-
-  // 既存のB-REL6描画に干渉しないため、**直線時だけ**オーバーレイで描く
-  main.addEventListener('pointerdown', (e)=>{
-    const {x,y} = pos(e);
-    drawing=true; sx=lx=x; sy=ly=y;
-  }, {passive:false});
-
-  main.addEventListener('pointermove', (e)=>{
-    const {x,y} = pos(e);
-    lx=x; ly=y;
-
-    // 直線プレビュー条件：Shift押下、またはtoolが'line'相当
-    const straight = e.shiftKey || tool==='line' || tool==='straight';
-
-    octx.clearRect(0,0,ov.width,ov.height);
-    if (!drawing) return;
-
-    if (tool==='eraser') {
-      styleErase(mtx);
-      mtx.lineWidth = (window.eraserSize||24) * dpr;
-      mtx.beginPath(); mtx.moveTo(lx,ly); mtx.lineTo(lx+0.01,ly); mtx.stroke();
-      return;
-    }
-
-    if (straight){
-      // ★ プレビューだけ overlay に描く（本描画はmouseupで1回）
-      style(octx, tool==='marker' ? 'marker' : 'pen');
-      octx.beginPath(); octx.moveTo(sx,sy); octx.lineTo(lx,ly); octx.stroke();
-    } else {
-      // フリーハンドは従来どおり main に直接
-      style(mtx, tool==='marker' ? 'marker' : 'pen');
-      mtx.beginPath(); mtx.moveTo(sx,sy); mtx.lineTo(lx,ly); mtx.stroke();
-      sx=lx; sy=ly;
-    }
-  }, {passive:false});
-
-  main.addEventListener('pointerup', ()=>{
-    if (!drawing) return;
-    drawing=false;
-
-    // overlayの直線プレビューが出ていたら、本描画に1回だけ反映
-    if (octx){
-      const hasPreview = true; // 直線中は常に描いているため true でOK
-      if (hasPreview){
-        style(mtx, tool==='marker' ? 'marker' : 'pen');
-        mtx.beginPath(); mtx.moveTo(sx,sy); mtx.lineTo(lx,ly); mtx.stroke();
-      }
-      octx.clearRect(0,0,ov.width,ov.height);
-    }
-  }, {passive:true});
-
-  // 透明度・色の既定（B-REL6本体の既定があるならそちらが優先されます）
-  if (!window.penColor)    window.penColor    = penColor;
-  if (!window.markerColor) window.markerColor = markerColor;
-  if (typeof window.markerAlpha!=='number') window.markerAlpha = markerAlpha;
-})();
-</script>
-<script>
-/* ==== HF-B-REL6-min: straight-line preview + marker alpha unify (canvas-only) ==== */
-(function(){
-  // ---- 1) キャンバス特定（画面上で一番大きいcanvasをメインとみなす）
-  const canvases = Array.from(document.querySelectorAll('canvas'));
-  if (!canvases.length) return;
-  const main = canvases.reduce((a,b)=>(
-    (a.getBoundingClientRect().width*a.getBoundingClientRect().height) >=
-    (b.getBoundingClientRect().width*b.getBoundingClientRect().height) ? a : b
-  ));
-  const dpr = Math.max(1, window.devicePixelRatio||1);
-  const mtx = main.getContext('2d');
-
-  // ---- 2) オーバーレイ（直線プレビュー専用）
-  let ov = document.getElementById('nl-overlay-hf');
-  if(!ov){
-    ov = document.createElement('canvas');
-    ov.id = 'nl-overlay-hf';
-    ov.style.position='absolute';
-    ov.style.inset='0';
-    ov.style.pointerEvents='none';
-    ov.style.width=main.style.width||'100%';
-    ov.style.height=main.style.height||'100%';
-    main.parentNode.appendChild(ov);
-  }
-  const octx = ov.getContext('2d');
-
-  function syncOverlay(){
-    const r = main.getBoundingClientRect();
-    const w = Math.max(2, Math.floor(r.width*dpr));
-    const h = Math.max(2, Math.floor(r.height*dpr));
-    if(ov.width!==w) ov.width=w;
-    if(ov.height!==h) ov.height=h;
-    ov.style.width = r.width+'px';
-    ov.style.height= r.height+'px';
-    octx.lineCap = octx.lineJoin = 'round';
-  }
-  new ResizeObserver(syncOverlay).observe(main);
-  syncOverlay();
-
-  // ---- 3) 既定色（B-REL6本体が別で設定していればそちらを優先）
-  if(!mtx._nlInitDone){
-    try{
-      // 既定：ペン=黒、マーカー=黄（直線/曲線の透明度は0.5）
-      if(typeof window.penColor    === 'undefined') window.penColor    = '#000000';
-      if(typeof window.markerColor === 'undefined') window.markerColor = '#FFFF00';
-      if(typeof window.markerAlpha !== 'number')    window.markerAlpha = 0.5;
-      // mtx側の初期値が無い場合のみ補完
-      if(!mtx.strokeStyle) mtx.strokeStyle = window.penColor;
-      if(!mtx.lineWidth)   mtx.lineWidth   = 2 * dpr;
-    }catch(_){}
-    mtx._nlInitDone = true;
-  }
-
-  // ---- 4) 直線（Shift押下の時だけ）を overlay に描く。本描画は pointerup で1回。
-  let drawing=false, sx=0, sy=0, lx=0, ly=0, shifted=false;
-
-  function getIsMarkerNow(){
-    // 現在の太さやグローバル変数から推定（B-REL6側のcurrentToolがあれば尊重）
-    if (typeof window.currentTool === 'string' && /marker/i.test(window.currentTool)) return true;
-    if (typeof window.tool === 'string' && /marker/i.test(window.tool)) return true;
-    const w = (mtx.lineWidth||2);
-    // 太めは“マーカー”とみなす（閾値は見た目 10px 目安）
-    return (w/dpr) >= 10;
-  }
-
-  function styleLikeMain(ctx){
-    // 現在のメインcanvasのスタイルを踏襲（色・太さ）、透明度はツールに応じて調整
-    const wasAlpha = ctx.globalAlpha;
-    const isMarker = getIsMarkerNow();
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.strokeStyle = mtx.strokeStyle;
-    ctx.lineWidth   = mtx.lineWidth;
-    ctx.globalAlpha = isMarker ? (typeof window.markerAlpha==='number'? window.markerAlpha : 0.5) : 1.0;
-    ctx.lineCap = ctx.lineJoin = 'round';
-    return ()=>{ ctx.globalAlpha = wasAlpha; };
-  }
-
-  function pos(e){
-    const r = main.getBoundingClientRect();
-    return { x:(e.clientX - r.left)*dpr, y:(e.clientY - r.top)*dpr };
-  }
-
-  main.addEventListener('pointerdown', (e)=>{
-    // Shiftが押されてない時は、B-REL6本体の処理に任せる
-    shifted = !!e.shiftKey;
-    if(!shifted) return;
-    e.preventDefault(); e.stopPropagation();
-    const p = pos(e); sx=lx=p.x; sy=ly=p.y; drawing=true;
-    octx.clearRect(0,0,ov.width,ov.height);
-  }, {passive:false, capture:false});
-
-  main.addEventListener('pointermove', (e)=>{
-    if(!drawing || !shifted) return;
-    e.preventDefault(); e.stopPropagation();
-    const p = pos(e); lx=p.x; ly=p.y;
-    octx.clearRect(0,0,ov.width,ov.height);
-    const undoAlpha = styleLikeMain(octx);
-    octx.beginPath(); octx.moveTo(sx,sy); octx.lineTo(lx,ly); octx.stroke();
-    undoAlpha();
-  }, {passive:false, capture:false});
-
-  function endStraight(){
-    if(!drawing) return;
-    const undoAlpha = styleLikeMain(mtx);
-    mtx.beginPath(); mtx.moveTo(sx,sy); mtx.lineTo(lx,ly); mtx.stroke();
-    undoAlpha();
-    octx.clearRect(0,0,ov.width,ov.height);
-    drawing=false; shifted=false;
-  }
-
-  main.addEventListener('pointerup',   (e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); endStraight(); }}, {passive:true});
-  main.addEventListener('pointercancel',(e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); octx.clearRect(0,0,ov.width,ov.height); drawing=false; shifted=false; }}, {passive:true});
-  main.addEventListener('pointerleave', (e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); octx.clearRect(0,0,ov.width,ov.height); drawing=false; shifted=false; }}, {passive:true});
-
-  // ---- 5) モバイル長押しで（もし本体に消しゴムが選択中なら）設定ダイアログを開くだけ
-  // B-REL6にダイアログがない場合は何もしません（UI追加はしない）
-  let lp=null;
-  main.addEventListener('pointerdown', ()=>{
-    clearTimeout(lp);
-    lp=setTimeout(()=>{
-      if ((window.currentTool && /eraser/i.test(window.currentTool)) ||
-          (window.tool && /eraser/i.test(window.tool))) {
-        const dlg = document.getElementById('eraserDialog');
-        if(dlg && dlg.showModal) dlg.showModal();
-      }
-    }, 600);
-  }, {passive:true});
-  main.addEventListener('pointerup', ()=>clearTimeout(lp), {passive:true});
-  main.addEventListener('pointermove', ()=>clearTimeout(lp), {passive:true});
-  main.addEventListener('pointercancel', ()=>clearTimeout(lp), {passive:true});
-})();
-</script>
-<script>
-/* ==== HF-BREL6-STRICT: 最小追記だけで色/透明度/直線を修正（キャンバス限定） ==== */
-(function(){
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
-
-  /* --- 1) 対象キャンバス特定：最も大きいcanvas＝お絵描き面 --- */
-  const canvases = Array.from(document.querySelectorAll('canvas'));
-  if (!canvases.length) return;
-  const main = canvases.reduce((a,b)=>{
-    const ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect();
-    return (ra.width*ra.height) >= (rb.width*rb.height) ? a : b;
-  });
-  const mtx = main.getContext('2d');
-
-  /* --- 2) 直線プレビュー用オーバーレイ（小さいcanvasは無視） --- */
-  let ov = document.getElementById('nl-hf-overlay');
-  if(!ov){
-    ov = document.createElement('canvas');
-    ov.id = 'nl-hf-overlay';
-    ov.style.cssText = 'position:absolute;inset:0;pointer-events:none;width:100%;height:100%';
-    main.parentNode.appendChild(ov);
-  }
-  const octx = ov.getContext('2d');
-  function syncOverlay(){
-    const r = main.getBoundingClientRect();
-    const w = Math.max(2, Math.floor(r.width*dpr));
-    const h = Math.max(2, Math.floor(r.height*dpr));
-    if (ov.width!==w)  ov.width  = w;
-    if (ov.height!==h) ov.height = h;
-    octx.lineCap = octx.lineJoin = 'round';
-  }
-  new ResizeObserver(syncOverlay).observe(main); syncOverlay();
-
-  /* --- 3) 既定色（初回だけ強制：ペン=黒、マーカー=黄、α=0.5） --- */
-  const DEF = { pen:'#000000', marker:'#FFFF00', alpha:0.5 };
-  let firstStrokeFixed = false; // ★最初の一筆だけ黒を保証
-  // 本体側のグローバルが無ければ補完
-  if (typeof window.markerAlpha !== 'number') window.markerAlpha = DEF.alpha;
-  if (!window.penColor)    window.penColor    = DEF.pen;
-  if (!window.markerColor) window.markerColor = DEF.marker;
-
-  /* --- 4) マーカーかどうかの判定（優先：本体のcurrentTool → 色/太さで推定） --- */
-  function isMarkerNow(ctx){
-    if (typeof window.currentTool === 'string' && /marker|マーカー/i.test(window.currentTool)) return true;
-    if (typeof window.tool === 'string'       && /marker|マーカー/i.test(window.tool))       return true;
-    // 色が黄系 or 線が太い（10px以上）ならマーカーとみなす
-    const st = String(ctx.strokeStyle||'').toLowerCase();
-    const looksYellow = /#ff0|#ffff00|rgb\(\s*255\s*,\s*255\s*,\s*0\s*\)|hsl\(\s*60/i.test(st);
-    const wide = (ctx.lineWidth||0)/dpr >= 10;
-    return looksYellow || wide;
-  }
-
-  /* --- 5) CanvasRenderingContext2D.stroke を“軽く”ラップして α を強制統一 --- */
-  const bigAreaMin = 200000; // 小さいアイコン用canvasは除外
-  const origStroke = mtx.stroke.__nlOrig || mtx.stroke;
-  function wrapStroke(ctx){
-    if (ctx.__nlStrokeWrapped) return;
-    const orig = ctx.stroke.bind(ctx);
-    ctx.stroke = function(){
-      const c = this.canvas;
-      if (!c || (c.width*c.height)<bigAreaMin) return orig();
-      // 初回だけ：ペン=黒を保証（初期が黄でも黒に直す）
-      if (!firstStrokeFixed){
-        if (String(this.strokeStyle).toLowerCase().includes('#ffff00') ||
-            String(this.strokeStyle).toLowerCase().includes('rgb(255, 255, 0)')) {
-          this.strokeStyle = DEF.pen;
-        }
-        firstStrokeFixed = true;
-      }
-      // マーカーなら α を常に 0.5（または window.markerAlpha）に統一
-      const isMarker = isMarkerNow(this);
-      const saved = this.globalAlpha;
-      if (isMarker && this.globalCompositeOperation !== 'destination-out'){
-        this.globalAlpha = (typeof window.markerAlpha==='number' ? window.markerAlpha : DEF.alpha);
-      } else {
-        // ペンは常に不透明
-        if (this.globalCompositeOperation !== 'destination-out') this.globalAlpha = 1.0;
-      }
-      try{ return orig(); } finally { this.globalAlpha = saved; }
-    };
-    ctx.__nlStrokeWrapped = true;
-  }
-  // メインctxと、将来作られる別ctxにも適用（必要最小限）
-  wrapStroke(mtx);
-
-  /* --- 6) Shift直線：ドラッグ中はoverlay、pointerupで1回だけ本描画 --- */
-  let drawing=false, sx=0, sy=0, lx=0, ly=0, shifted=false;
-  function pos(e){
-    const r = main.getBoundingClientRect();
-    return { x:(e.clientX - r.left)*dpr, y:(e.clientY - r.top)*dpr };
-  }
-  function copyStyle(fromCtx, toCtx){
-    toCtx.globalCompositeOperation='source-over';
-    toCtx.strokeStyle = fromCtx.strokeStyle || DEF.pen;
-    toCtx.lineWidth   = fromCtx.lineWidth || (2*dpr);
-    toCtx.lineCap=toCtx.lineJoin='round';
-    // マーカーの時は overlay でもαを統一
-    if (isMarkerNow(fromCtx)) toCtx.globalAlpha = (typeof window.markerAlpha==='number'? window.markerAlpha : DEF.alpha);
-    else toCtx.globalAlpha = 1.0;
-  }
-
-  main.addEventListener('pointerdown', (e)=>{
-    shifted = !!e.shiftKey;
-    if(!shifted) return;           // 非直線は本体に任せる
-    e.preventDefault(); e.stopPropagation();
-    const p = pos(e); sx=lx=p.x; sy=ly=p.y; drawing=true;
-    octx.clearRect(0,0,ov.width,ov.height);
-  }, {passive:false, capture:false});
-
-  main.addEventListener('pointermove', (e)=>{
-    if(!drawing || !shifted) return;
-    e.preventDefault(); e.stopPropagation();
-    const p = pos(e); lx=p.x; ly=p.y;
-    octx.clearRect(0,0,ov.width,ov.height);
-    copyStyle(mtx, octx);
-    octx.beginPath(); octx.moveTo(sx,sy); octx.lineTo(lx,ly); octx.stroke();
-  }, {passive:false, capture:false});
-
-  function commitStraight(){
-    const saved = { alpha: mtx.globalAlpha, comp: mtx.globalCompositeOperation };
-    copyStyle(mtx, mtx);
-    mtx.beginPath(); mtx.moveTo(sx,sy); mtx.lineTo(lx,ly); mtx.stroke();
-    mtx.globalAlpha = saved.alpha; mtx.globalCompositeOperation = saved.comp;
-    octx.clearRect(0,0,ov.width,ov.height);
-  }
-  main.addEventListener('pointerup',   (e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); commitStraight(); drawing=false; shifted=false; }}, {passive:true});
-  main.addEventListener('pointercancel',(e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); octx.clearRect(0,0,ov.width,ov.height); drawing=false; shifted=false; }}, {passive:true});
-  main.addEventListener('pointerleave', (e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); octx.clearRect(0,0,ov.width,ov.height); drawing=false; shifted=false; }}, {passive:true});
-
-  /* --- 7) モバイル長押しで消しゴム設定（存在する場合のみ） --- */
-  let t=null;
-  main.addEventListener('pointerdown', ()=>{ clearTimeout(t); t=setTimeout(()=>{
-    const dlg = document.getElementById('eraserDialog') ||
-                document.querySelector('[id*="eraser"][role="dialog"]') ||
-                document.querySelector('dialog[id*="erase"], dialog[id*="eraser"]');
-    if(dlg && typeof dlg.showModal==='function'){ try{ dlg.showModal(); }catch(_){} }
-  }, 600); }, {passive:true});
-  main.addEventListener('pointerup', ()=>clearTimeout(t), {passive:true});
-  main.addEventListener('pointermove', ()=>clearTimeout(t), {passive:true});
-  main.addEventListener('pointercancel', ()=>clearTimeout(t), {passive:true});
-
-})();
-</script>
-<script>
-/* ==== HF: B-REL6 最小追記（色/透明度の強制統一 + Shift直線プレビュー） ==== */
-(function(){
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
-
-  // ❶ 対象キャンバス＝画面で一番大きい canvas（お絵描き面）
-  const cvs = Array.from(document.querySelectorAll('canvas'));
-  if (!cvs.length) return;
-  const main = cvs.reduce((a,b)=>{
-    const ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect();
-    return (ra.width*ra.height) >= (rb.width*rb.height) ? a : b;
-  });
-  const ctx = main.getContext('2d');
-
-  // ❷ 直線プレビュー用のオーバーレイ（本体UIには手を触れない）
-  let ov = document.getElementById('nl-hf-overlay');
-  if(!ov){
-    ov = document.createElement('canvas');
-    ov.id = 'nl-hf-overlay';
-    ov.style.cssText = 'position:absolute;inset:0;pointer-events:none;width:100%;height:100%';
-    main.parentNode.appendChild(ov);
-  }
-  const octx = ov.getContext('2d');
-  function syncOv(){
-    const r = main.getBoundingClientRect();
-    const w = Math.max(2, Math.floor(r.width*dpr));
-    const h = Math.max(2, Math.floor(r.height*dpr));
-    if(ov.width!==w) ov.width=w;
-    if(ov.height!==h) ov.height=h;
-    octx.lineCap=octx.lineJoin='round';
-  }
-  new ResizeObserver(syncOv).observe(main); syncOv();
-
-  // ❸ 既定（存在しなければ補完）
-  const DEF = { pen:'#000000', marker:'#FFFF00', alpha:0.5 };
-  if (typeof window.markerAlpha !== 'number') window.markerAlpha = DEF.alpha;
-  if (!window.penColor)    window.penColor    = DEF.pen;
-  if (!window.markerColor) window.markerColor = DEF.marker;
-
-  // ❹ 「今はマーカーか？」の判定（本体のtool名→太さ→色の順で判断）
-  function isMarkerNow(c){
-    if (typeof window.currentTool === 'string' && /marker|マーカー/i.test(window.currentTool)) return true;
-    if (typeof window.tool       === 'string' && /marker|マーカー/i.test(window.tool))       return true;
-    const wide = (c.lineWidth||0)/dpr >= 6; // 幅6px以上はマーカー扱い（調整可）
-    if (wide) return true;
-    const st = String(c.strokeStyle||'').toLowerCase();
-    return /#ff0|#ffff00|rgb\(\s*255\s*,\s*255\s*,\s*0\s*\)/.test(st); // 黄系
-  }
-
-  // ❺ stroke を“軽く”ラップ：毎回ここで α を確定させる（曲線にも効く）
-  const big = 200000; // 小さなUI用canvasは除外
-  const proto = CanvasRenderingContext2D.prototype;
-  if (!proto.__nl_hf_wrapped){
-    const _stroke = proto.stroke;
-    proto.stroke = function(){
-      const c = this.canvas;
-      if (!c || (c.width*c.height)<big) return _stroke.call(this);
-      const saved = this.globalAlpha;
-      if (this.globalCompositeOperation !== 'destination-out'){
-        this.globalAlpha = isMarkerNow(this) ? (typeof window.markerAlpha==='number'?window.markerAlpha:DEF.alpha) : 1.0;
-      }
-      try { return _stroke.call(this); }
-      finally { this.globalAlpha = saved; }
-    };
-    proto.__nl_hf_wrapped = true;
-  }
-
-  // ❻ 初筆が黄になる個体対策：最初の一筆だけ黒に強制
-  let firstStrokeFixed = false;
-  const _beginPath = ctx.beginPath.bind(ctx);
-  ctx.beginPath = function(){
-    if (!firstStrokeFixed){
-      try{
-        this.strokeStyle = window.penColor || DEF.pen;
-        this.globalAlpha = 1.0;
-      }catch(_){}
-      firstStrokeFixed = true;
-    }
-    return _beginPath();
-  };
-
-  // ❼ Shift直線：ドラッグ中は overlay、pointerup で本描画を1回だけ
-  let drawing=false, sx=0, sy=0, lx=0, ly=0, shifted=false;
-  function pos(e){
-    const r = main.getBoundingClientRect();
-    return { x:(e.clientX - r.left)*dpr, y:(e.clientY - r.top)*dpr };
-  }
-  function copyStyle(from, to){
-    to.globalCompositeOperation = 'source-over';
-    to.strokeStyle = from.strokeStyle || DEF.pen;
-    to.lineWidth   = from.lineWidth   || (2*dpr);
-    to.lineCap = to.lineJoin = 'round';
-    to.globalAlpha = isMarkerNow(from) ? (typeof window.markerAlpha==='number'?window.markerAlpha:DEF.alpha) : 1.0;
-  }
-
-  main.addEventListener('pointerdown', (e)=>{
-    shifted = !!e.shiftKey;
-    if(!shifted) return;              // 直線以外は本体に任せる
-    e.preventDefault(); e.stopPropagation();
-    const p = pos(e); sx=lx=p.x; sy=ly=p.y; drawing=true;
-    octx.clearRect(0,0,ov.width,ov.height);
-  }, {passive:false});
-
-  main.addEventListener('pointermove', (e)=>{
-    if(!drawing || !shifted) return;
-    e.preventDefault(); e.stopPropagation();
-    const p = pos(e); lx=p.x; ly=p.y;
-    octx.clearRect(0,0,ov.width,ov.height);
-    copyStyle(ctx, octx);
-    octx.beginPath(); octx.moveTo(sx,sy); octx.lineTo(lx,ly); octx.stroke();
-  }, {passive:false});
-
-  function commit(){
-    copyStyle(ctx, ctx);
-    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(lx,ly); ctx.stroke();
-    octx.clearRect(0,0,ov.width,ov.height);
-  }
-  main.addEventListener('pointerup',   (e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); commit(); drawing=false; shifted=false; }}, {passive:true});
-  main.addEventListener('pointercancel',(e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); octx.clearRect(0,0,ov.width,ov.height); drawing=false; shifted=false; }}, {passive:true});
-  main.addEventListener('pointerleave', (e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); octx.clearRect(0,0,ov.width,ov.height); drawing=false; shifted=false; }}, {passive:true});
-
-  // ❽ モバイル長押し→消しゴム設定（ダイアログが存在するときだけ）
-  let t=null;
-  main.addEventListener('pointerdown', ()=>{ clearTimeout(t); t=setTimeout(()=>{
-    const dlg = document.getElementById('eraserDialog') ||
-                document.querySelector('dialog[id*="eraser"], dialog[id*="erase"]');
-    if(dlg && dlg.showModal) try{ dlg.showModal(); }catch(_){}
-  }, 600); }, {passive:true});
-  main.addEventListener('pointerup', ()=>clearTimeout(t), {passive:true});
-  main.addEventListener('pointermove', ()=>clearTimeout(t), {passive:true});
-  main.addEventListener('pointercancel', ()=>clearTimeout(t), {passive:true});
-})();
-</script>
-<script>
-/* ==== HF2 for B-REL6 (canvas-only): Shift直線 + marker alpha unify + 初回黒 ==== */
-(function(){
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
-  // 画面で一番大きいキャンバス＝描画面
-  const cvs = Array.from(document.querySelectorAll('canvas'));
-  if (!cvs.length) return;
-  const main = cvs.reduce((a,b)=>{
-    const ar=a.getBoundingClientRect(), br=b.getBoundingClientRect();
-    return (ar.width*ar.height) >= (br.width*br.height) ? a : b;
-  });
-  const ctx = main.getContext('2d');
-
-  /* ▼ 設定（必要なら数値だけ変えてください） */
-  const MARKER_WIDTH_PX = 12;   // これ以上の太さは「マーカー」とみなし α=0.5 を強制
-  const MARKER_ALPHA    = 0.5;  // マーカーの濃さ（直線・曲線とも）
-  const FIRST_PEN_COLOR = '#000000'; // 初回一筆の色
-
-  // ---- 直線プレビュー用オーバーレイ（本体UIは触らない）
-  let ov = document.getElementById('nl-hf2-ov');
-  if(!ov){
-    ov = document.createElement('canvas');
-    ov.id = 'nl-hf2-ov';
-    ov.style.cssText='position:absolute;inset:0;pointer-events:none;width:100%;height:100%';
-    main.parentNode.appendChild(ov);
-  }
-  const octx = ov.getContext('2d');
-  function syncOV(){
-    const r=main.getBoundingClientRect(), w=Math.max(2,Math.floor(r.width*dpr)), h=Math.max(2,Math.floor(r.height*dpr));
-    if(ov.width!==w) ov.width=w; if(ov.height!==h) ov.height=h;
-    octx.lineCap=octx.lineJoin='round';
-  }
-  new ResizeObserver(syncOV).observe(main); syncOV();
-
-  // ---- 1) 初回だけ黒に上書き
-  let firstFixed=false;
-  const _begin=ctx.beginPath.bind(ctx);
-  ctx.beginPath=function(){
-    if(!firstFixed){
-      try{ this.strokeStyle = FIRST_PEN_COLOR; this.globalAlpha=1.0; }catch(_){}
-      firstFixed=true;
-    }
-    return _begin();
-  };
-
-  // ---- 2) stroke を軽ラップ：太い線は常に α=0.5（destination-out=消しゴムは除外）
-  const BIG = 200000;  // 小キャンバス排除
-  if(!CanvasRenderingContext2D.prototype.__hf2Wrapped){
-    const _stroke = CanvasRenderingContext2D.prototype.stroke;
-    CanvasRenderingContext2D.prototype.stroke = function(){
-      const c=this.canvas;
-      if(!c || (c.width*c.height)<BIG) return _stroke.call(this);
-      const saved=this.globalAlpha;
-      if(this.globalCompositeOperation!=='destination-out'){
-        const px = (this.lineWidth||0)/dpr;
-        this.globalAlpha = (px >= MARKER_WIDTH_PX) ? MARKER_ALPHA : 1.0;
-      }
-      try{ return _stroke.call(this); }
-      finally{ this.globalAlpha = saved; }
-    };
-    CanvasRenderingContext2D.prototype.__hf2Wrapped = true;
-  }
-
-  // ---- 3) Shift直線：プレビューはoverlay、本描画はpointerupに1回だけ
-  let drawing=false,sx=0,sy=0,lx=0,ly=0,shifted=false;
-  const pos=e=>{ const r=main.getBoundingClientRect(); return {x:(e.clientX-r.left)*dpr,y:(e.clientY-r.top)*dpr}; };
-  const copyStyle=(from,to)=>{ to.globalCompositeOperation='source-over'; to.strokeStyle=from.strokeStyle||FIRST_PEN_COLOR; to.lineWidth=from.lineWidth||2*dpr; to.lineCap=to.lineJoin='round'; to.globalAlpha=((to.lineWidth/dpr)>=MARKER_WIDTH_PX)?MARKER_ALPHA:1.0; };
-  main.addEventListener('pointerdown',(e)=>{ shifted=!!e.shiftKey; if(!shifted) return; e.preventDefault(); e.stopPropagation(); const p=pos(e); sx=lx=p.x; sy=ly=p.y; drawing=true; octx.clearRect(0,0,ov.width,ov.height); },{passive:false});
-  main.addEventListener('pointermove',(e)=>{ if(!drawing||!shifted) return; e.preventDefault(); e.stopPropagation(); const p=pos(e); lx=p.x; ly=p.y; octx.clearRect(0,0,ov.width,ov.height); copyStyle(ctx,octx); octx.beginPath(); octx.moveTo(sx,sy); octx.lineTo(lx,ly); octx.stroke(); },{passive:false});
-  function commit(){ copyStyle(ctx,ctx); ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(lx,ly); ctx.stroke(); octx.clearRect(0,0,ov.width,ov.height); }
-  const end=(e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); if(drawing) commit(); drawing=false; shifted=false; } };
-  main.addEventListener('pointerup',end,{passive:true});
-  main.addEventListener('pointercancel',end,{passive:true});
-  main.addEventListener('pointerleave',end,{passive:true});
-})();
 </script>
 </body></html>
