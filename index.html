@@ -672,5 +672,148 @@ boot();
   main.addEventListener('pointercancel', ()=>clearTimeout(lp), {passive:true});
 })();
 </script>
+<script>
+/* ==== HF-BREL6-STRICT: 最小追記だけで色/透明度/直線を修正（キャンバス限定） ==== */
+(function(){
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+
+  /* --- 1) 対象キャンバス特定：最も大きいcanvas＝お絵描き面 --- */
+  const canvases = Array.from(document.querySelectorAll('canvas'));
+  if (!canvases.length) return;
+  const main = canvases.reduce((a,b)=>{
+    const ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect();
+    return (ra.width*ra.height) >= (rb.width*rb.height) ? a : b;
+  });
+  const mtx = main.getContext('2d');
+
+  /* --- 2) 直線プレビュー用オーバーレイ（小さいcanvasは無視） --- */
+  let ov = document.getElementById('nl-hf-overlay');
+  if(!ov){
+    ov = document.createElement('canvas');
+    ov.id = 'nl-hf-overlay';
+    ov.style.cssText = 'position:absolute;inset:0;pointer-events:none;width:100%;height:100%';
+    main.parentNode.appendChild(ov);
+  }
+  const octx = ov.getContext('2d');
+  function syncOverlay(){
+    const r = main.getBoundingClientRect();
+    const w = Math.max(2, Math.floor(r.width*dpr));
+    const h = Math.max(2, Math.floor(r.height*dpr));
+    if (ov.width!==w)  ov.width  = w;
+    if (ov.height!==h) ov.height = h;
+    octx.lineCap = octx.lineJoin = 'round';
+  }
+  new ResizeObserver(syncOverlay).observe(main); syncOverlay();
+
+  /* --- 3) 既定色（初回だけ強制：ペン=黒、マーカー=黄、α=0.5） --- */
+  const DEF = { pen:'#000000', marker:'#FFFF00', alpha:0.5 };
+  let firstStrokeFixed = false; // ★最初の一筆だけ黒を保証
+  // 本体側のグローバルが無ければ補完
+  if (typeof window.markerAlpha !== 'number') window.markerAlpha = DEF.alpha;
+  if (!window.penColor)    window.penColor    = DEF.pen;
+  if (!window.markerColor) window.markerColor = DEF.marker;
+
+  /* --- 4) マーカーかどうかの判定（優先：本体のcurrentTool → 色/太さで推定） --- */
+  function isMarkerNow(ctx){
+    if (typeof window.currentTool === 'string' && /marker|マーカー/i.test(window.currentTool)) return true;
+    if (typeof window.tool === 'string'       && /marker|マーカー/i.test(window.tool))       return true;
+    // 色が黄系 or 線が太い（10px以上）ならマーカーとみなす
+    const st = String(ctx.strokeStyle||'').toLowerCase();
+    const looksYellow = /#ff0|#ffff00|rgb\(\s*255\s*,\s*255\s*,\s*0\s*\)|hsl\(\s*60/i.test(st);
+    const wide = (ctx.lineWidth||0)/dpr >= 10;
+    return looksYellow || wide;
+  }
+
+  /* --- 5) CanvasRenderingContext2D.stroke を“軽く”ラップして α を強制統一 --- */
+  const bigAreaMin = 200000; // 小さいアイコン用canvasは除外
+  const origStroke = mtx.stroke.__nlOrig || mtx.stroke;
+  function wrapStroke(ctx){
+    if (ctx.__nlStrokeWrapped) return;
+    const orig = ctx.stroke.bind(ctx);
+    ctx.stroke = function(){
+      const c = this.canvas;
+      if (!c || (c.width*c.height)<bigAreaMin) return orig();
+      // 初回だけ：ペン=黒を保証（初期が黄でも黒に直す）
+      if (!firstStrokeFixed){
+        if (String(this.strokeStyle).toLowerCase().includes('#ffff00') ||
+            String(this.strokeStyle).toLowerCase().includes('rgb(255, 255, 0)')) {
+          this.strokeStyle = DEF.pen;
+        }
+        firstStrokeFixed = true;
+      }
+      // マーカーなら α を常に 0.5（または window.markerAlpha）に統一
+      const isMarker = isMarkerNow(this);
+      const saved = this.globalAlpha;
+      if (isMarker && this.globalCompositeOperation !== 'destination-out'){
+        this.globalAlpha = (typeof window.markerAlpha==='number' ? window.markerAlpha : DEF.alpha);
+      } else {
+        // ペンは常に不透明
+        if (this.globalCompositeOperation !== 'destination-out') this.globalAlpha = 1.0;
+      }
+      try{ return orig(); } finally { this.globalAlpha = saved; }
+    };
+    ctx.__nlStrokeWrapped = true;
+  }
+  // メインctxと、将来作られる別ctxにも適用（必要最小限）
+  wrapStroke(mtx);
+
+  /* --- 6) Shift直線：ドラッグ中はoverlay、pointerupで1回だけ本描画 --- */
+  let drawing=false, sx=0, sy=0, lx=0, ly=0, shifted=false;
+  function pos(e){
+    const r = main.getBoundingClientRect();
+    return { x:(e.clientX - r.left)*dpr, y:(e.clientY - r.top)*dpr };
+  }
+  function copyStyle(fromCtx, toCtx){
+    toCtx.globalCompositeOperation='source-over';
+    toCtx.strokeStyle = fromCtx.strokeStyle || DEF.pen;
+    toCtx.lineWidth   = fromCtx.lineWidth || (2*dpr);
+    toCtx.lineCap=toCtx.lineJoin='round';
+    // マーカーの時は overlay でもαを統一
+    if (isMarkerNow(fromCtx)) toCtx.globalAlpha = (typeof window.markerAlpha==='number'? window.markerAlpha : DEF.alpha);
+    else toCtx.globalAlpha = 1.0;
+  }
+
+  main.addEventListener('pointerdown', (e)=>{
+    shifted = !!e.shiftKey;
+    if(!shifted) return;           // 非直線は本体に任せる
+    e.preventDefault(); e.stopPropagation();
+    const p = pos(e); sx=lx=p.x; sy=ly=p.y; drawing=true;
+    octx.clearRect(0,0,ov.width,ov.height);
+  }, {passive:false, capture:false});
+
+  main.addEventListener('pointermove', (e)=>{
+    if(!drawing || !shifted) return;
+    e.preventDefault(); e.stopPropagation();
+    const p = pos(e); lx=p.x; ly=p.y;
+    octx.clearRect(0,0,ov.width,ov.height);
+    copyStyle(mtx, octx);
+    octx.beginPath(); octx.moveTo(sx,sy); octx.lineTo(lx,ly); octx.stroke();
+  }, {passive:false, capture:false});
+
+  function commitStraight(){
+    const saved = { alpha: mtx.globalAlpha, comp: mtx.globalCompositeOperation };
+    copyStyle(mtx, mtx);
+    mtx.beginPath(); mtx.moveTo(sx,sy); mtx.lineTo(lx,ly); mtx.stroke();
+    mtx.globalAlpha = saved.alpha; mtx.globalCompositeOperation = saved.comp;
+    octx.clearRect(0,0,ov.width,ov.height);
+  }
+  main.addEventListener('pointerup',   (e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); commitStraight(); drawing=false; shifted=false; }}, {passive:true});
+  main.addEventListener('pointercancel',(e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); octx.clearRect(0,0,ov.width,ov.height); drawing=false; shifted=false; }}, {passive:true});
+  main.addEventListener('pointerleave', (e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); octx.clearRect(0,0,ov.width,ov.height); drawing=false; shifted=false; }}, {passive:true});
+
+  /* --- 7) モバイル長押しで消しゴム設定（存在する場合のみ） --- */
+  let t=null;
+  main.addEventListener('pointerdown', ()=>{ clearTimeout(t); t=setTimeout(()=>{
+    const dlg = document.getElementById('eraserDialog') ||
+                document.querySelector('[id*="eraser"][role="dialog"]') ||
+                document.querySelector('dialog[id*="erase"], dialog[id*="eraser"]');
+    if(dlg && typeof dlg.showModal==='function'){ try{ dlg.showModal(); }catch(_){} }
+  }, 600); }, {passive:true});
+  main.addEventListener('pointerup', ()=>clearTimeout(t), {passive:true});
+  main.addEventListener('pointermove', ()=>clearTimeout(t), {passive:true});
+  main.addEventListener('pointercancel', ()=>clearTimeout(t), {passive:true});
+
+})();
+</script>
 
 </body></html>
