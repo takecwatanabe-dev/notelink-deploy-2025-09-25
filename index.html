@@ -539,5 +539,138 @@ boot();
   if (typeof window.markerAlpha!=='number') window.markerAlpha = markerAlpha;
 })();
 </script>
+<script>
+/* ==== HF-B-REL6-min: straight-line preview + marker alpha unify (canvas-only) ==== */
+(function(){
+  // ---- 1) キャンバス特定（画面上で一番大きいcanvasをメインとみなす）
+  const canvases = Array.from(document.querySelectorAll('canvas'));
+  if (!canvases.length) return;
+  const main = canvases.reduce((a,b)=>(
+    (a.getBoundingClientRect().width*a.getBoundingClientRect().height) >=
+    (b.getBoundingClientRect().width*b.getBoundingClientRect().height) ? a : b
+  ));
+  const dpr = Math.max(1, window.devicePixelRatio||1);
+  const mtx = main.getContext('2d');
+
+  // ---- 2) オーバーレイ（直線プレビュー専用）
+  let ov = document.getElementById('nl-overlay-hf');
+  if(!ov){
+    ov = document.createElement('canvas');
+    ov.id = 'nl-overlay-hf';
+    ov.style.position='absolute';
+    ov.style.inset='0';
+    ov.style.pointerEvents='none';
+    ov.style.width=main.style.width||'100%';
+    ov.style.height=main.style.height||'100%';
+    main.parentNode.appendChild(ov);
+  }
+  const octx = ov.getContext('2d');
+
+  function syncOverlay(){
+    const r = main.getBoundingClientRect();
+    const w = Math.max(2, Math.floor(r.width*dpr));
+    const h = Math.max(2, Math.floor(r.height*dpr));
+    if(ov.width!==w) ov.width=w;
+    if(ov.height!==h) ov.height=h;
+    ov.style.width = r.width+'px';
+    ov.style.height= r.height+'px';
+    octx.lineCap = octx.lineJoin = 'round';
+  }
+  new ResizeObserver(syncOverlay).observe(main);
+  syncOverlay();
+
+  // ---- 3) 既定色（B-REL6本体が別で設定していればそちらを優先）
+  if(!mtx._nlInitDone){
+    try{
+      // 既定：ペン=黒、マーカー=黄（直線/曲線の透明度は0.5）
+      if(typeof window.penColor    === 'undefined') window.penColor    = '#000000';
+      if(typeof window.markerColor === 'undefined') window.markerColor = '#FFFF00';
+      if(typeof window.markerAlpha !== 'number')    window.markerAlpha = 0.5;
+      // mtx側の初期値が無い場合のみ補完
+      if(!mtx.strokeStyle) mtx.strokeStyle = window.penColor;
+      if(!mtx.lineWidth)   mtx.lineWidth   = 2 * dpr;
+    }catch(_){}
+    mtx._nlInitDone = true;
+  }
+
+  // ---- 4) 直線（Shift押下の時だけ）を overlay に描く。本描画は pointerup で1回。
+  let drawing=false, sx=0, sy=0, lx=0, ly=0, shifted=false;
+
+  function getIsMarkerNow(){
+    // 現在の太さやグローバル変数から推定（B-REL6側のcurrentToolがあれば尊重）
+    if (typeof window.currentTool === 'string' && /marker/i.test(window.currentTool)) return true;
+    if (typeof window.tool === 'string' && /marker/i.test(window.tool)) return true;
+    const w = (mtx.lineWidth||2);
+    // 太めは“マーカー”とみなす（閾値は見た目 10px 目安）
+    return (w/dpr) >= 10;
+  }
+
+  function styleLikeMain(ctx){
+    // 現在のメインcanvasのスタイルを踏襲（色・太さ）、透明度はツールに応じて調整
+    const wasAlpha = ctx.globalAlpha;
+    const isMarker = getIsMarkerNow();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = mtx.strokeStyle;
+    ctx.lineWidth   = mtx.lineWidth;
+    ctx.globalAlpha = isMarker ? (typeof window.markerAlpha==='number'? window.markerAlpha : 0.5) : 1.0;
+    ctx.lineCap = ctx.lineJoin = 'round';
+    return ()=>{ ctx.globalAlpha = wasAlpha; };
+  }
+
+  function pos(e){
+    const r = main.getBoundingClientRect();
+    return { x:(e.clientX - r.left)*dpr, y:(e.clientY - r.top)*dpr };
+  }
+
+  main.addEventListener('pointerdown', (e)=>{
+    // Shiftが押されてない時は、B-REL6本体の処理に任せる
+    shifted = !!e.shiftKey;
+    if(!shifted) return;
+    e.preventDefault(); e.stopPropagation();
+    const p = pos(e); sx=lx=p.x; sy=ly=p.y; drawing=true;
+    octx.clearRect(0,0,ov.width,ov.height);
+  }, {passive:false, capture:false});
+
+  main.addEventListener('pointermove', (e)=>{
+    if(!drawing || !shifted) return;
+    e.preventDefault(); e.stopPropagation();
+    const p = pos(e); lx=p.x; ly=p.y;
+    octx.clearRect(0,0,ov.width,ov.height);
+    const undoAlpha = styleLikeMain(octx);
+    octx.beginPath(); octx.moveTo(sx,sy); octx.lineTo(lx,ly); octx.stroke();
+    undoAlpha();
+  }, {passive:false, capture:false});
+
+  function endStraight(){
+    if(!drawing) return;
+    const undoAlpha = styleLikeMain(mtx);
+    mtx.beginPath(); mtx.moveTo(sx,sy); mtx.lineTo(lx,ly); mtx.stroke();
+    undoAlpha();
+    octx.clearRect(0,0,ov.width,ov.height);
+    drawing=false; shifted=false;
+  }
+
+  main.addEventListener('pointerup',   (e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); endStraight(); }}, {passive:true});
+  main.addEventListener('pointercancel',(e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); octx.clearRect(0,0,ov.width,ov.height); drawing=false; shifted=false; }}, {passive:true});
+  main.addEventListener('pointerleave', (e)=>{ if(shifted){ e.preventDefault(); e.stopPropagation(); octx.clearRect(0,0,ov.width,ov.height); drawing=false; shifted=false; }}, {passive:true});
+
+  // ---- 5) モバイル長押しで（もし本体に消しゴムが選択中なら）設定ダイアログを開くだけ
+  // B-REL6にダイアログがない場合は何もしません（UI追加はしない）
+  let lp=null;
+  main.addEventListener('pointerdown', ()=>{
+    clearTimeout(lp);
+    lp=setTimeout(()=>{
+      if ((window.currentTool && /eraser/i.test(window.currentTool)) ||
+          (window.tool && /eraser/i.test(window.tool))) {
+        const dlg = document.getElementById('eraserDialog');
+        if(dlg && dlg.showModal) dlg.showModal();
+      }
+    }, 600);
+  }, {passive:true});
+  main.addEventListener('pointerup', ()=>clearTimeout(lp), {passive:true});
+  main.addEventListener('pointermove', ()=>clearTimeout(lp), {passive:true});
+  main.addEventListener('pointercancel', ()=>clearTimeout(lp), {passive:true});
+})();
+</script>
 
 </body></html>
