@@ -408,4 +408,136 @@ function boot(){
 }
 boot();
 </script>
+  <script>
+// ===== B-REL6 Hotfix: straight-line preview + marker alpha unify =====
+(function(){
+  // 既存のキャンバスを取得（B-REL6のID/クラスに合わせて調整）:
+  const stage = document.getElementById('stage') || document.querySelector('.a4-stage') || document.body;
+  const main  = document.getElementById('note')  || document.querySelector('canvas#note') || document.querySelector('canvas');
+  // 既に存在すれば再利用、無ければ重ねる overlay
+  let ov = document.getElementById('overlay');
+  if(!ov){
+    ov = document.createElement('canvas');
+    ov.id = 'overlay';
+    ov.style.cssText = 'position:absolute;inset:0;pointer-events:none;width:100%;height:100%';
+    main.parentNode.appendChild(ov);
+  }
+  const mtx  = main.getContext('2d');
+  const octx = ov.getContext('2d');
+  const dpr  = Math.max(1, window.devicePixelRatio || 1);
+
+  // A4枠に追随（B-REL6側がresizeしているなら同じタイミングで同期されます）
+  function sync(){
+    const r = main.getBoundingClientRect();
+    const w = Math.max(2, Math.floor(r.width  * dpr));
+    const h = Math.max(2, Math.floor(r.height * dpr));
+    if (ov.width!==w)  ov.width  = w;
+    if (ov.height!==h) ov.height = h;
+    ov.style.width  = r.width+'px';
+    ov.style.height = r.height+'px';
+    octx.lineCap = octx.lineJoin = 'round';
+  }
+  new ResizeObserver(sync).observe(main);
+  sync();
+
+  // ---- 既定（B-REL6 と同じ変数があればそちらを優先） ----
+  let tool         = window.currentTool || 'pen';      // 'pen'|'marker'|'eraser'|'line' など
+  let penColor     = window.penColor    || '#000000';
+  let markerColor  = window.markerColor || '#FFFF00';
+  let markerAlpha  = (typeof window.markerAlpha==='number') ? window.markerAlpha : 0.5;
+  let penWidth     = window.penWidth    || 2;
+  let markerWidth  = window.markerWidth || 18;
+
+  // 既存のツール変更APIがあればフック（任意）
+  if (window.NoteLink && typeof window.NoteLink.onToolChange === 'function') {
+    const orig = window.NoteLink.onToolChange;
+    window.NoteLink.onToolChange = (t)=>{ tool=t; return orig(t); };
+  } else {
+    // 簡易ホットキー（B-REL6の既存挙動は変えない）
+    addEventListener('keydown', e=>{
+      if(e.key==='1') tool='pen';
+      if(e.key==='2') tool='marker';
+      if(e.key==='3') tool='eraser';
+    });
+  }
+
+  // ---- 直線はプレビューだけに描く（本描画はmouseupで1回） ----
+  let drawing=false, sx=0, sy=0, lx=0, ly=0;
+
+  function style(ctx, which){
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineCap = ctx.lineJoin = 'round';
+    if (which==='pen'){
+      ctx.globalAlpha = 1.0; ctx.strokeStyle = penColor;    ctx.lineWidth = penWidth   * dpr;
+    } else if (which==='marker'){
+      ctx.globalAlpha = markerAlpha; // ★ 直線/曲線どちらも統一
+      ctx.strokeStyle = markerColor; ctx.lineWidth = markerWidth * dpr;
+    }
+  }
+  function styleErase(ctx){
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.globalAlpha = 1.0;
+  }
+  function pos(e){
+    const r = main.getBoundingClientRect();
+    return { x:(e.clientX - r.left)*dpr, y:(e.clientY - r.top)*dpr };
+  }
+
+  // 既存のB-REL6描画に干渉しないため、**直線時だけ**オーバーレイで描く
+  main.addEventListener('pointerdown', (e)=>{
+    const {x,y} = pos(e);
+    drawing=true; sx=lx=x; sy=ly=y;
+  }, {passive:false});
+
+  main.addEventListener('pointermove', (e)=>{
+    const {x,y} = pos(e);
+    lx=x; ly=y;
+
+    // 直線プレビュー条件：Shift押下、またはtoolが'line'相当
+    const straight = e.shiftKey || tool==='line' || tool==='straight';
+
+    octx.clearRect(0,0,ov.width,ov.height);
+    if (!drawing) return;
+
+    if (tool==='eraser') {
+      styleErase(mtx);
+      mtx.lineWidth = (window.eraserSize||24) * dpr;
+      mtx.beginPath(); mtx.moveTo(lx,ly); mtx.lineTo(lx+0.01,ly); mtx.stroke();
+      return;
+    }
+
+    if (straight){
+      // ★ プレビューだけ overlay に描く（本描画はmouseupで1回）
+      style(octx, tool==='marker' ? 'marker' : 'pen');
+      octx.beginPath(); octx.moveTo(sx,sy); octx.lineTo(lx,ly); octx.stroke();
+    } else {
+      // フリーハンドは従来どおり main に直接
+      style(mtx, tool==='marker' ? 'marker' : 'pen');
+      mtx.beginPath(); mtx.moveTo(sx,sy); mtx.lineTo(lx,ly); mtx.stroke();
+      sx=lx; sy=ly;
+    }
+  }, {passive:false});
+
+  main.addEventListener('pointerup', ()=>{
+    if (!drawing) return;
+    drawing=false;
+
+    // overlayの直線プレビューが出ていたら、本描画に1回だけ反映
+    if (octx){
+      const hasPreview = true; // 直線中は常に描いているため true でOK
+      if (hasPreview){
+        style(mtx, tool==='marker' ? 'marker' : 'pen');
+        mtx.beginPath(); mtx.moveTo(sx,sy); mtx.lineTo(lx,ly); mtx.stroke();
+      }
+      octx.clearRect(0,0,ov.width,ov.height);
+    }
+  }, {passive:true});
+
+  // 透明度・色の既定（B-REL6本体の既定があるならそちらが優先されます）
+  if (!window.penColor)    window.penColor    = penColor;
+  if (!window.markerColor) window.markerColor = markerColor;
+  if (typeof window.markerAlpha!=='number') window.markerAlpha = markerAlpha;
+})();
+</script>
+
 </body></html>
