@@ -105,7 +105,7 @@ header.topbar{position:fixed;top:0;left:0;right:0;z-index:2000;height:var(--topb
     <div id="panelTool">-</div>
     <button class="close" id="panelClose" title="閉じる">☒</button>
   </div>
-  <!-- ★ 初期値を黒に -->
+  <!-- 既定：ペン=黒、マーカー=黄50% -->
   <div class="row"><label>色</label><input type="color" id="uiColor" value="#000000"></div>
   <div class="row" id="rowSize"><label>太さ</label><input type="range" min="1" max="60" value="4" id="uiSize"><span id="uiSizeVal">4px (1.06 mm)</span></div>
   <div class="row" id="rowAlpha"><label>不透明度</label><input type="range" min="10" max="100" value="50" id="uiAlpha"><span id="uiAlphaVal">50%</span></div>
@@ -158,7 +158,7 @@ const $=s=>document.querySelector(s), $$=s=>Array.from(document.querySelectorAll
 const DPR=Math.max(1,self.devicePixelRatio||1);
 const Q=new URLSearchParams(location.search);
 let DBG=Q.has('debug');
-function logln(s){ if(!DBG) return; const t=$('#log'); t.value+=(s+"\\n"); t.scrollTop=t.scrollHeight; console.log(s); }
+function logln(s){ if(!DBG) return; const t=$('#log'); t.value+=(s+"\n"); t.scrollTop=t.scrollHeight; console.log(s); }
 function showDiag(force){ $('#diag').style.display=force?'block':'none'; }
 (function(){ const chip=$('#dbgChip'); if(DBG){ chip.style.display='block'; showDiag(true);} addEventListener('keydown',e=>{ if(e.altKey&&(e.key==='d'||e.key==='D')) chip.click();}); chip.onclick=()=>{ const d=$('#diag'); d.style.display=(d.style.display==='block'?'none':'block'); };})();
 function envLine(){const pe='onpointerdown'in window,ts='ontouchstart'in window,mt=(navigator.maxTouchPoints||0),dpr=(self.devicePixelRatio||1);return `env: PE=${pe} TS=${ts} mt=${mt} dpr=${dpr} ua=${navigator.userAgent}`;}
@@ -189,7 +189,7 @@ document.addEventListener('visibilitychange',()=>{ if(!document.hidden) setTimeo
 
 /* ==== state ==== */
 let tool='pen';
-/* ★ 既定値を修正：pen=黒 / marker=黄 / alpha=0.5 */
+/* 既定：ペン=黒 / マーカー=黄50% */
 const perTool={
   pen:{   color:'#000000', size:4,  alpha:1,   cap:'butt', straight:false},
   marker:{color:'#FFFF00', size:16, alpha:.5,  cap:'butt', straight:false},
@@ -269,7 +269,7 @@ function drawGrid(){ clear(cvGrid); if(!gridOn) return;
   const step=mmToPx(gridStepMM), s=ctxGrid, ox=0.5*DPR, oy=0.5*DPR;
   s.save(); s.lineWidth=1; s.strokeStyle=gridColor+'CC'; s.beginPath();
   for(let x=ox;x<=cvGrid.width;x+=step){ s.moveTo(x,0); s.lineTo(x,cvGrid.height); }
-  for(let y=oy;y<=cvGrid.height;y+=step){ s.moveTo(0,y); s.lineTo(y,cvGrid.height); }
+  for(let y=oy;y<=cvGrid.height;y+=step){ s.moveTo(0,y); s.lineTo(cvGrid.width,y); }  /* ← 横線バグ修正 */
   s.stroke(); s.restore(); }
 
 /* ==== history (Undo/Redo) ==== */
@@ -317,6 +317,8 @@ function shouldReject(e){
 
 /* === drawing handlers === */
 let drawing=false, startPt=null, panning=false;
+/* 追加：曲線の重ね塗り防止用の前回点 */
+let lastPt=null;
 
 function onDown(e){
   if(DBG) logln(`evt: pd type=${e.pointerType} pres=${e.pressure??'?'} w=${e.width||0} h=${e.height||0}`);
@@ -341,7 +343,10 @@ function onDown(e){
   startPt=(gridFirst && straight)?snapToGrid(p):p;
   drawing=true;
 
-  if(!straight){ ctx.beginPath(); ctx.moveTo(startPt.x,startPt.y); }
+  if(!straight){
+    /* ★ セグメント描画に切替（同一路線の再ストローク禁止） */
+    lastPt = startPt;
+  }
 
   pushHistory();
 }
@@ -355,9 +360,16 @@ function onMove(e){
 
   const straight=(straightKey || $('#uiStraight').checked);
   if(!straight){
+    /* ★ 区間ごと1回だけ stroke（濃さが積み上がらない） */
     const list=(e.getCoalescedEvents && e.getCoalescedEvents()) || [e];
-    for(const ev of list){ const p=pt(ev); ctx.lineTo(p.x,p.y); }
-    ctx.stroke();
+    for(const ev of list){
+      const p=pt(ev);
+      ctx.beginPath();
+      ctx.moveTo(lastPt.x,lastPt.y);
+      ctx.lineTo(p.x,p.y);
+      ctx.stroke();
+      lastPt = p;
+    }
     return;
   }
   const p=pt(e), sp=snapLine(startPt,p);
@@ -373,7 +385,7 @@ function onUp(e){
 
   const straight=(straightKey || $('#uiStraight').checked);
   if(straight){ const p=pt(e), sp=snapLine(startPt,p); setCtx(); ctx.beginPath(); ctx.moveTo(startPt.x,startPt.y); ctx.lineTo(sp.x,sp.y); ctx.stroke(); }
-  drawing=false; startPt=null; clear(cvGuide);
+  drawing=false; startPt=null; lastPt=null; clear(cvGuide);
 
   if(DBG) logln(`evt: pu type=${e.pointerType} pres=${e.pressure??'?'} w=${e.width||0} h=${e.height||0}`);
 }
